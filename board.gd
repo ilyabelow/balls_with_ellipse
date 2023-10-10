@@ -1,24 +1,17 @@
 extends Node2D
 
-const gravity := Vector2.DOWN * 500.0
+const gravity := Vector2.DOWN * 1000.0
 
+@export var ball_to_ball_elasticity := .9
+@export var ball_to_wall_elasticity := .9
 
-@export var amout_of_balls := 300
-@export var ball_spawn_period := 0.1
-var last_spawned_at := 0.0
+@export var ball_rad := 10.
 
-@export var ball_to_ball_elasticity := 0.7
-@export var ball_to_peg_elasticity := 0.3
-@export var ball_to_wall_elasticity := 0.1
-
-@export var peg_rad := 10.
-@export var ball_rad := 5.
-@export var wall_rad := 3.
+var ellipse_pos := Vector2(250, 300)
 var balls: Array[Ball]
-var pegs: Array[Peg]
-var capsules: Array[Capsule]
+var ellipse: Ellipse
 
-@export var grid_resolution := 15.
+@export var grid_resolution := 20.
 var grid = []
 
 
@@ -29,42 +22,20 @@ func _ready() -> void:
 		for j in range(ceil(screen_size.y / grid_resolution)):
 			y_array.push_back([])
 		grid.append(y_array)
+
+	ellipse = Ellipse.new()
+	ellipse.a = 200.
+	ellipse.b = 100.
+	add_child(ellipse)
 	
-	const peg_dist := 40.
-	const vert_pegs = 9
-	var hor_pegs: int = screen_size.x / peg_dist
-	for i in range(vert_pegs):
-		for j in range(hor_pegs + (i+1)%2):
-			var peg := Peg.new()
-			peg.position = (Vector2.DOWN * (i+3) + Vector2.RIGHT * (j + (i%2)/2.)) * peg_dist
-			peg.radius = peg_rad
-			add_child(peg)
-			pegs.append(peg)
+	for i in range(20):
+		var ball := Ball.new()
+		balls.append(ball)
+		ball.position = Vector2(100,0)*randf() + Vector2(0,100)*randf() + ellipse_pos
+		ball.radius = ball_rad
+		add_child(ball)
 
-	for i in range(hor_pegs + vert_pegs%2):
-		var capsule := Capsule.new()
-		var peg := pegs[len(pegs) - i - 1]
-		capsule.p2 = peg.position
-		capsule.p2.y = get_viewport_rect().end.y
-		capsule.p1 = peg.position
-		capsule.radius = wall_rad
-		add_child(capsule)
-		capsules.append(capsule)
-
-
-func _process(delta: float) -> void:
-	var cur_time := Time.get_ticks_msec() / 1000.
-	if amout_of_balls > 0 and cur_time > last_spawned_at + ball_spawn_period:
-		last_spawned_at = cur_time
-		var new_ball := Ball.new() as Ball
-		new_ball.position = Vector2.DOWN * 50. +  Vector2.RIGHT * ((randf()-0.5)*10. + get_viewport_rect().size.x/2.)
-		new_ball.radius = ball_rad
-		add_child(new_ball)
-		balls.append(new_ball)
-		amout_of_balls -= 1
-
-
-func check_collision_round(r1, r2) -> bool:
+func check_collision(r1, r2) -> bool:
 	var rad_sum = (r1.radius + r2.radius)
 	return (r1.position - r2.position).length_squared() < rad_sum*rad_sum
 
@@ -88,45 +59,17 @@ func collide_balls(b1: Ball, b2: Ball) -> void:
 	b2.position -= intersection_length * 0.5 * normal
 
 
-func collide_ball_and_floor(b: Ball) -> void:
-	var screen_dr := get_viewport_rect().end
-	if b.position.y > screen_dr.y - b.radius:
-		b.position.y = screen_dr.y - b.radius
-		b.velocity.y = -b.velocity.y * ball_to_wall_elasticity
+func check_collision_with_ellipse(b: Ball, e: Ellipse) -> bool:
+	var p := e.get_nearest_point_approx(b.position)
+	var dist := (p - b.position).length()
+	return dist*dist < b.radius*b.radius
 
 
-func collide_ball_and_peg(b: Ball, p: Peg) -> void:
-	var diff := b.position - p.position
-	var dist := diff.length()
-	var normal := diff / dist
-	var tangent := normal.orthogonal()
-
-	var tangent_vel := b.velocity.project(tangent)
-	var normal_vel := b.velocity.project(normal)
-
-	b.velocity = tangent_vel - normal_vel * ball_to_peg_elasticity;
-
-	var intersection_length = b.radius + p.radius - dist
-	b.position += intersection_length * normal 
-
-
-func get_nearest_point_capsule(c: Capsule, p: Vector2) -> Vector2:
-	if (c.p2 - c.p1).dot(p - c.p1) < 0.0:
-		return c.p1
-	if (c.p1 - c.p2).dot(p - c.p2) < 0.0:
-		return c.p2
-	return c.p1 + (p - c.p1).project(c.p2 - c.p1)
-
-
-func check_collision_capsule(b: Ball, c: Capsule) -> bool:
-	var cap_p := get_nearest_point_capsule(c, b.position)
-	var rad_sum = (c.radius + b.radius)
-	return (cap_p - b.position).length_squared() < rad_sum*rad_sum
-
-
-func collide_ball_and_capsule(b: Ball, c: Capsule) -> void:
-	var cap_p := get_nearest_point_capsule(c, b.position)
-	var diff := b.position - cap_p
+func collide_ball_and_ellipse(b: Ball, e: Ellipse) -> void:
+	var point := e.get_nearest_point_approx(b.position)
+	var diff := b.position - point
+	if (b.position - e.position).dot(diff) > 0:
+		diff *= -1
 	var dist := diff.length()
 	var normal := diff / dist
 	var tangent := normal.orthogonal()
@@ -135,9 +78,8 @@ func collide_ball_and_capsule(b: Ball, c: Capsule) -> void:
 	var normal_vel := b.velocity.project(normal)
 
 	b.velocity = tangent_vel - normal_vel * ball_to_wall_elasticity;
+	b.position = point + normal * b.radius
 
-	var intersection_length = b.radius + c.radius - dist
-	b.position += intersection_length * normal 
 
 
 func clear_grid() -> void:
@@ -146,55 +88,50 @@ func clear_grid() -> void:
 			grid[i][j].clear()
 
 
-func get_grid_coord(node: Node2D) -> Vector2i:
-	var i: int = clampi(node.position.x / grid_resolution, 0, len(grid)-1)
-	var j: int = clampi(node.position.y / grid_resolution, 0, len(grid[i])-1)
+func get_grid_coord(ball: Ball) -> Vector2i:
+	var i: int = clampi(ball.position.x / grid_resolution, 0, len(grid)-1)
+	var j: int = clampi(ball.position.y / grid_resolution, 0, len(grid[i])-1)
 	return Vector2i(i, j)
 
-func add_to_grid(node: Node2D):
-	var coord := get_grid_coord(node)
-	grid[coord.x][coord.y].append(node)
+
+func add_to_grid(ball: Ball):
+	var coord := get_grid_coord(ball)
+	grid[coord.x][coord.y].append(ball)
 
 
-func collide_two_cells(c1, c2):
-	for node1 in c1:
-		for node2 in c2:
-			if node1 == node2:
+func collide_two_cells(cell1, cell2):
+	for ball1 in cell1:
+		for ball2 in cell2:
+			if ball1 == ball2:
 				continue
-			if check_collision_round(node1, node2):
-				collide_balls(node1, node2)
+			if check_collision(ball1, ball2):
+				collide_balls(ball1, ball2)
 
 
 func _physics_process(delta: float) -> void:
-	clear_grid()
-	
-	for b in balls:
-		add_to_grid(b)
+	var time = Time.get_ticks_msec()/1000.
+	var tm: Transform2D
+	tm = tm.rotated(time)
+	tm.origin = -Vector2(0, abs(sin(time)**15))*200. + ellipse_pos
+	ellipse.upd_tm(tm)
 
-	for p in pegs:
-		var coord := get_grid_coord(p)
-		for di in range(max(coord.x-1, 0), min(coord.x+2, len(grid))):
-			for dj in range(max(coord.y-1, 0), min(coord.y+2, len(grid[coord.x]))):
-				for b in grid[di][dj]:
-					if check_collision_round(b, p):
-						collide_ball_and_peg(b, p)
 
-	for c in capsules:
-		for b in balls:
-			if check_collision_capsule(b, c):
-				collide_ball_and_capsule(b, c)
+	for k in range(3):
+		clear_grid()
 
-	for i in range(len(grid)):
-		for j in range(len(grid[i])):
-			for di in range(max(i-1, 0), min(i+2, len(grid))):
-				for dj in range(max(j-1, 0), min(j+2, len(grid[i]))):
-					collide_two_cells(grid[di][dj], grid[i][j])
-	
-
-	for i in range(len(grid)):
-		for node in grid[i][len(grid[i])-1]:
-			collide_ball_and_floor(node)
+		for ball in balls:
+			add_to_grid(ball)
+		for i in range(len(grid)):
+			for j in range(len(grid[i])):
+				for other_i in range(max(i-1, 0), min(i+2, len(grid))):
+					for other_j in range(max(j-1, 0), min(j+2, len(grid[i]))):
+						collide_two_cells(grid[other_i][other_j], grid[i][j])
+		for ball in balls:
+			if check_collision_with_ellipse(ball, ellipse):
+				collide_ball_and_ellipse(ball, ellipse)
 
 	for ball in balls:
 		ball.apply_gravity(delta, gravity)
 		ball.move(delta)
+		
+	
